@@ -1,32 +1,68 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
+const cors = require("cors");
+const admin = require("firebase-admin");
+const serviceAccount = require("./capstonec04-c3cfc-firebase-adminsdk-uh2o4-9cd7371be2.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const app = express();
+app.use(cors());
+
+const firestore = admin.firestore();
 const server = http.createServer(app);
-
-// Membuat instance server WebSocket
 const wss = new WebSocket.Server({ server });
-
 const clients = new Set();
 
-// Menangani koneksi WebSocket
-wss.on("connection", (ws) => {
-  console.log("Koneksi WebSocket baru.");
-
-  // Menambahkan koneksi baru ke set clients
+wss.on("connection", async (ws, req) => {
+  const clientIp = req.connection.remoteAddress;
+  console.log(`Koneksi WebSocket baru dari ${clientIp}.`);
   clients.add(ws);
 
-  // Menangani pesan yang diterima dari klien
-  ws.on("message", (message) => {
+  // Memeriksa apakah dokumen dengan nama clientIp sudah ada dalam koleksi "test-device"
+  const deviceDoc = await firestore
+    .collection("test-device")
+    .doc(clientIp)
+    .get();
+
+  if (!deviceDoc.exists) {
+    console.log(
+      `Dokumen dengan nama ${clientIp} belum ada. Menambahkan dokumen.`
+    );
+
+    // Menambahkan dokumen pada koleksi "test-device" jika belum ada
+    const deviceCollection = firestore.collection("test-device").doc(clientIp);
+
+    // Mengatur bidang (field) pada dokumen
+    await deviceCollection.set({
+      name: "",
+      wid: "",
+      gender: 0,
+    });
+  } else {
+    console.log(`Dokumen dengan nama ${clientIp} sudah ada.`);
+  }
+
+  ws.on("message", async (message) => {
     console.log(`Pesan diterima: ${message}`);
 
     if (typeof message !== "string") {
-      // Jika pesan bukan dalam bentuk teks, konversi ke teks
       message = message.toString();
     }
 
-    // Mengirim pesan ke semua koneksi aktif (client lainnya)
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch (error) {
+      console.error("Error parsing JSON:", error);
+      return;
+    }
+
+    firestore.collection("pulse-data").doc(`${clientIp}`).add(data);
+
     clients.forEach((client) => {
       if (client !== ws && client.readyState === WebSocket.OPEN) {
         client.send(message);
@@ -34,16 +70,12 @@ wss.on("connection", (ws) => {
     });
   });
 
-  // Menangani penutupan koneksi WebSocket
   ws.on("close", () => {
-    console.log("Koneksi WebSocket ditutup.");
-
-    // Hapus koneksi yang ditutup dari set clients
+    console.log(`Koneksi WebSocket dari ${clientIp} ditutup.`);
     clients.delete(ws);
   });
 });
 
-// Menjalankan server Express di port tertentu
 const port = 5000;
 server.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
